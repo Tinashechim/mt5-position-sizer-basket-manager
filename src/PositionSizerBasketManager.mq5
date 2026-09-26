@@ -1,35 +1,37 @@
 #include <Trade/Trade.mqh>
 
 #property copyright "Tinashe Chimanikire"
-#property version   "1.85"
+#property version   "2.02"
 #property strict
 
 CTrade trade;
 
 
 // ============================================================
-// PANEL SETTINGS
+// RESPONSIVE PANEL
 // ============================================================
 
-#define PANEL_X       15
-#define PANEL_Y       20
-#define PANEL_WIDTH   360
-#define PANEL_HEIGHT  710
+#define BASE_PANEL_X       12
+#define BASE_PANEL_Y       16
+#define BASE_PANEL_WIDTH   304
+#define BASE_PANEL_HEIGHT  742
 
-#define LABEL_X       (PANEL_X + 14)
-#define VALUE_X       (PANEL_X + 190)
-#define UNIT_X        (PANEL_X + 305)
+#define BASE_LABEL_X       11
+#define BASE_VALUE_X       160
+#define BASE_UNIT_X        256
+
+#define BASE_FONT_TITLE    6
+#define BASE_FONT_SECTION  6
+#define BASE_FONT_NORMAL   5
+#define BASE_FONT_SMALL    5
+
+
+double panel_scale = 1.0;
 
 
 // ============================================================
 // ENUMS
 // ============================================================
-
-enum BasketTPMode
-{
-   TP_MONEY,
-   TP_PERCENTAGE
-};
 
 enum RiskMode
 {
@@ -37,27 +39,184 @@ enum RiskMode
    RISK_PERCENTAGE
 };
 
+enum DailyTargetMode
+{
+   DAILY_MONEY,
+   DAILY_PERCENTAGE
+};
+
 
 // ============================================================
-// SHARED BASKET GLOBAL VARIABLES
+// SHARED GLOBAL VARIABLES
 // ============================================================
 
 string GV_ACTIVE;
 string GV_START_BALANCE;
-string GV_TP_MODE;
-string GV_TP_VALUE;
 string GV_CLOSE_LOCK;
+
+string GV_DAILY_MODE;
+string GV_DAILY_TARGET;
 
 
 // ============================================================
-// POSITION SIZER VARIABLES
+// LOCAL POSITION SIZER VARIABLES
 // ============================================================
 
 RiskMode risk_mode = RISK_PERCENTAGE;
+
 double risk_value = 1.0;
 
-// SL line is local to each chart.
 bool sl_line_enabled = true;
+
+
+// ============================================================
+// RESPONSIVE SIZE HELPERS
+// ============================================================
+
+int S(double value)
+{
+   int result =
+      (int)MathRound(
+         value * panel_scale
+      );
+
+   if(result < 1)
+      result = 1;
+
+   return result;
+}
+
+
+int PanelX()
+{
+   return S(BASE_PANEL_X);
+}
+
+
+int PanelY()
+{
+   return S(BASE_PANEL_Y);
+}
+
+
+int PanelWidth()
+{
+   return S(BASE_PANEL_WIDTH);
+}
+
+
+int PanelHeight()
+{
+   return S(BASE_PANEL_HEIGHT);
+}
+
+
+int LabelX()
+{
+   return
+      PanelX() +
+      S(BASE_LABEL_X);
+}
+
+
+int ValueX()
+{
+   return
+      PanelX() +
+      S(BASE_VALUE_X);
+}
+
+
+int UnitX()
+{
+   return
+      PanelX() +
+      S(BASE_UNIT_X);
+}
+
+
+int FontSize(int base_size)
+{
+   int size =
+      (int)MathRound(
+         base_size * panel_scale
+      );
+
+   if(size < 5)
+      size = 5;
+
+   return size;
+}
+
+
+// ============================================================
+// CALCULATE RESPONSIVE SCALE
+// ============================================================
+
+void CalculatePanelScale()
+{
+   long chart_width =
+      ChartGetInteger(
+         0,
+         CHART_WIDTH_IN_PIXELS
+      );
+
+
+   long chart_height =
+      ChartGetInteger(
+         0,
+         CHART_HEIGHT_IN_PIXELS
+      );
+
+
+   if(
+      chart_width <= 0 ||
+      chart_height <= 0
+   )
+   {
+      panel_scale = 1.0;
+      return;
+   }
+
+
+   double available_width =
+      (double)chart_width - 20.0;
+
+
+   double available_height =
+      (double)chart_height - 20.0;
+
+
+   double width_scale =
+      available_width /
+      (double)(
+         BASE_PANEL_X +
+         BASE_PANEL_WIDTH
+      );
+
+
+   double height_scale =
+      available_height /
+      (double)(
+         BASE_PANEL_Y +
+         BASE_PANEL_HEIGHT
+      );
+
+
+   panel_scale =
+      MathMin(
+         width_scale,
+         height_scale
+      );
+
+
+   if(panel_scale > 1.0)
+      panel_scale = 1.0;
+
+
+   if(panel_scale < 0.50)
+      panel_scale = 0.50;
+}
 
 
 // ============================================================
@@ -73,23 +232,29 @@ void CreateGlobalVariableNames()
          )
       );
 
+
    string prefix =
       "PSBM_" + account + "_";
+
 
    GV_ACTIVE =
       prefix + "ACTIVE";
 
+
    GV_START_BALANCE =
       prefix + "START_BALANCE";
 
-   GV_TP_MODE =
-      prefix + "TP_MODE";
-
-   GV_TP_VALUE =
-      prefix + "TP_VALUE";
 
    GV_CLOSE_LOCK =
       prefix + "CLOSE_LOCK";
+
+
+   GV_DAILY_MODE =
+      prefix + "DAILY_MODE";
+
+
+   GV_DAILY_TARGET =
+      prefix + "DAILY_TARGET";
 }
 
 
@@ -100,27 +265,37 @@ void CreateGlobalVariableNames()
 void InitializeSharedVariables()
 {
    if(!GlobalVariableCheck(GV_ACTIVE))
-      GlobalVariableSet(GV_ACTIVE, 0.0);
+      GlobalVariableSet(
+         GV_ACTIVE,
+         0.0
+      );
+
 
    if(!GlobalVariableCheck(GV_START_BALANCE))
-      GlobalVariableSet(GV_START_BALANCE, 0.0);
-
-   if(!GlobalVariableCheck(GV_TP_MODE))
       GlobalVariableSet(
-         GV_TP_MODE,
-         (double)TP_PERCENTAGE
+         GV_START_BALANCE,
+         0.0
       );
 
-   if(!GlobalVariableCheck(GV_TP_VALUE))
-      GlobalVariableSet(
-         GV_TP_VALUE,
-         2.0
-      );
 
    if(!GlobalVariableCheck(GV_CLOSE_LOCK))
       GlobalVariableSet(
          GV_CLOSE_LOCK,
          0.0
+      );
+
+
+   if(!GlobalVariableCheck(GV_DAILY_MODE))
+      GlobalVariableSet(
+         GV_DAILY_MODE,
+         (double)DAILY_PERCENTAGE
+      );
+
+
+   if(!GlobalVariableCheck(GV_DAILY_TARGET))
+      GlobalVariableSet(
+         GV_DAILY_TARGET,
+         5.0
       );
 }
 
@@ -147,22 +322,436 @@ double GetBasketStartBalance()
 }
 
 
-BasketTPMode GetSharedTPMode()
+// ============================================================
+// DAILY TARGET SETTINGS
+// ============================================================
+
+DailyTargetMode GetDailyTargetMode()
 {
    return
-      (BasketTPMode)
+      (DailyTargetMode)
       (int)GlobalVariableGet(
-         GV_TP_MODE
+         GV_DAILY_MODE
       );
 }
 
 
-double GetSharedTPValue()
+double GetDailyTargetValue()
 {
    return
       GlobalVariableGet(
-         GV_TP_VALUE
+         GV_DAILY_TARGET
       );
+}
+
+
+// ============================================================
+// DAILY SESSION
+//
+// 23:30:00 -> next day 23:29:59
+// ============================================================
+
+datetime GetDailySessionStart()
+{
+   datetime now =
+      TimeCurrent();
+
+
+   MqlDateTime session_struct;
+
+
+   TimeToStruct(
+      now,
+      session_struct
+   );
+
+
+   session_struct.hour = 23;
+   session_struct.min  = 30;
+   session_struct.sec  = 0;
+
+
+   datetime today_2330 =
+      StructToTime(
+         session_struct
+      );
+
+
+   if(now >= today_2330)
+      return today_2330;
+
+
+   return
+      today_2330 - 86400;
+}
+
+
+// ============================================================
+// CLOSED TRADING P/L
+// ============================================================
+
+double GetTodayClosedProfit()
+{
+   datetime start_time =
+      GetDailySessionStart();
+
+
+   datetime end_time =
+      TimeCurrent();
+
+
+   if(!HistorySelect(
+      start_time,
+      end_time
+   ))
+   {
+      return 0.0;
+   }
+
+
+   double result = 0.0;
+
+
+   int total =
+      HistoryDealsTotal();
+
+
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket =
+         HistoryDealGetTicket(i);
+
+
+      if(ticket == 0)
+         continue;
+
+
+      ENUM_DEAL_TYPE deal_type =
+         (ENUM_DEAL_TYPE)
+         HistoryDealGetInteger(
+            ticket,
+            DEAL_TYPE
+         );
+
+
+      if(
+         deal_type != DEAL_TYPE_BUY &&
+         deal_type != DEAL_TYPE_SELL
+      )
+      {
+         continue;
+      }
+
+
+      ENUM_DEAL_ENTRY entry =
+         (ENUM_DEAL_ENTRY)
+         HistoryDealGetInteger(
+            ticket,
+            DEAL_ENTRY
+         );
+
+
+      if(
+         entry != DEAL_ENTRY_OUT &&
+         entry != DEAL_ENTRY_OUT_BY &&
+         entry != DEAL_ENTRY_INOUT
+      )
+      {
+         continue;
+      }
+
+
+      double profit =
+         HistoryDealGetDouble(
+            ticket,
+            DEAL_PROFIT
+         );
+
+
+      double commission =
+         HistoryDealGetDouble(
+            ticket,
+            DEAL_COMMISSION
+         );
+
+
+      double swap =
+         HistoryDealGetDouble(
+            ticket,
+            DEAL_SWAP
+         );
+
+
+      double fee =
+         HistoryDealGetDouble(
+            ticket,
+            DEAL_FEE
+         );
+
+
+      result +=
+         profit +
+         commission +
+         swap +
+         fee;
+   }
+
+
+   return result;
+}
+
+
+// ============================================================
+// CLOSED TRADES EXIST?
+// ============================================================
+
+bool HasClosedTradesToday()
+{
+   datetime start_time =
+      GetDailySessionStart();
+
+
+   if(!HistorySelect(
+      start_time,
+      TimeCurrent()
+   ))
+   {
+      return false;
+   }
+
+
+   int total =
+      HistoryDealsTotal();
+
+
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket =
+         HistoryDealGetTicket(i);
+
+
+      if(ticket == 0)
+         continue;
+
+
+      ENUM_DEAL_TYPE deal_type =
+         (ENUM_DEAL_TYPE)
+         HistoryDealGetInteger(
+            ticket,
+            DEAL_TYPE
+         );
+
+
+      if(
+         deal_type != DEAL_TYPE_BUY &&
+         deal_type != DEAL_TYPE_SELL
+      )
+      {
+         continue;
+      }
+
+
+      ENUM_DEAL_ENTRY entry =
+         (ENUM_DEAL_ENTRY)
+         HistoryDealGetInteger(
+            ticket,
+            DEAL_ENTRY
+         );
+
+
+      if(
+         entry == DEAL_ENTRY_OUT ||
+         entry == DEAL_ENTRY_OUT_BY ||
+         entry == DEAL_ENTRY_INOUT
+      )
+      {
+         return true;
+      }
+   }
+
+
+   return false;
+}
+
+
+// ============================================================
+// DAILY START BALANCE
+// ============================================================
+
+double GetDailyStartBalance()
+{
+   double current_balance =
+      AccountInfoDouble(
+         ACCOUNT_BALANCE
+      );
+
+
+   double closed_profit =
+      GetTodayClosedProfit();
+
+
+   double start_balance =
+      current_balance -
+      closed_profit;
+
+
+   if(start_balance <= 0)
+      return current_balance;
+
+
+   return start_balance;
+}
+
+
+// ============================================================
+// CLOSED P/L PERCENTAGE
+// ============================================================
+
+double GetTodayClosedProfitPercent()
+{
+   double start_balance =
+      GetDailyStartBalance();
+
+
+   if(start_balance <= 0)
+      return 0.0;
+
+
+   return
+      (
+         GetTodayClosedProfit() /
+         start_balance
+      ) * 100.0;
+}
+
+
+// ============================================================
+// DAILY TARGET IN MONEY
+// ============================================================
+
+double GetDailyTargetMoney()
+{
+   double target =
+      GetDailyTargetValue();
+
+
+   if(GetDailyTargetMode() == DAILY_MONEY)
+      return target;
+
+
+   double start_balance =
+      GetDailyStartBalance();
+
+
+   return
+      start_balance *
+      (target / 100.0);
+}
+
+
+// ============================================================
+// REMAINING DAILY TARGET IN MONEY
+// ============================================================
+
+double GetRemainingDailyTargetMoney()
+{
+   double remaining =
+      GetDailyTargetMoney() -
+      GetTodayClosedProfit();
+
+
+   if(remaining < 0)
+      remaining = 0;
+
+
+   return remaining;
+}
+
+
+// ============================================================
+// REMAINING DAILY TARGET IN PERCENTAGE
+// ============================================================
+
+double GetRemainingDailyTargetPercent()
+{
+   double start_balance =
+      GetDailyStartBalance();
+
+
+   if(start_balance <= 0)
+      return 0.0;
+
+
+   return
+      (
+         GetRemainingDailyTargetMoney() /
+         start_balance
+      ) * 100.0;
+}
+
+
+// ============================================================
+// DAILY TARGET REACHED
+// ============================================================
+
+bool IsDailyTargetReached()
+{
+   double target_money =
+      GetDailyTargetMoney();
+
+
+   if(target_money <= 0)
+      return false;
+
+
+   return
+      GetTodayClosedProfit() >=
+      target_money;
+}
+
+
+// ============================================================
+// READ DAILY TARGET
+// ============================================================
+
+bool ReadDailyTarget()
+{
+   string text =
+      ObjectGetString(
+         0,
+         "PSBM_DAILY_TARGET_EDIT",
+         OBJPROP_TEXT
+      );
+
+
+   double value =
+      StringToDouble(text);
+
+
+   if(value <= 0)
+   {
+      ObjectSetString(
+         0,
+         "PSBM_DAILY_TARGET_EDIT",
+         OBJPROP_TEXT,
+         DoubleToString(
+            GetDailyTargetValue(),
+            2
+         )
+      );
+
+
+      return false;
+   }
+
+
+   GlobalVariableSet(
+      GV_DAILY_TARGET,
+      value
+   );
+
+
+   return true;
 }
 
 
@@ -174,13 +763,16 @@ double GetBasketProfit()
 {
    double profit = 0.0;
 
+
    int total =
       PositionsTotal();
+
 
    for(int i = 0; i < total; i++)
    {
       ulong ticket =
          PositionGetTicket(i);
+
 
       if(ticket > 0)
       {
@@ -191,12 +783,13 @@ double GetBasketProfit()
       }
    }
 
+
    return profit;
 }
 
 
 // ============================================================
-// BASKET TARGET
+// EFFECTIVE BASKET TARGET
 // ============================================================
 
 double GetBasketTarget()
@@ -204,55 +797,9 @@ double GetBasketTarget()
    if(!IsBasketActive())
       return 0.0;
 
-   double value =
-      GetSharedTPValue();
-
-   if(GetSharedTPMode() == TP_MONEY)
-      return value;
 
    return
-      GetBasketStartBalance() *
-      (value / 100.0);
-}
-
-
-// ============================================================
-// READ BASKET TARGET
-// ============================================================
-
-bool ReadBasketTarget()
-{
-   string text =
-      ObjectGetString(
-         0,
-         "PSBM_TARGET_EDIT",
-         OBJPROP_TEXT
-      );
-
-   double value =
-      StringToDouble(text);
-
-   if(value <= 0)
-   {
-      ObjectSetString(
-         0,
-         "PSBM_TARGET_EDIT",
-         OBJPROP_TEXT,
-         DoubleToString(
-            GetSharedTPValue(),
-            2
-         )
-      );
-
-      return false;
-   }
-
-   GlobalVariableSet(
-      GV_TP_VALUE,
-      value
-   );
-
-   return true;
+      GetRemainingDailyTargetMoney();
 }
 
 
@@ -265,20 +812,24 @@ void StartBasket()
    if(IsBasketActive())
       return;
 
+
    double balance =
       AccountInfoDouble(
          ACCOUNT_BALANCE
       );
+
 
    GlobalVariableSet(
       GV_START_BALANCE,
       balance
    );
 
+
    GlobalVariableSet(
       GV_ACTIVE,
       1.0
    );
+
 
    GlobalVariableSet(
       GV_CLOSE_LOCK,
@@ -298,10 +849,12 @@ void ResetBasket()
       0.0
    );
 
+
    GlobalVariableSet(
       GV_START_BALANCE,
       0.0
    );
+
 
    GlobalVariableSet(
       GV_CLOSE_LOCK,
@@ -319,6 +872,7 @@ void UpdateBasketState()
    int positions =
       PositionsTotal();
 
+
    if(
       positions > 0 &&
       !IsBasketActive()
@@ -328,6 +882,7 @@ void UpdateBasketState()
 
       return;
    }
+
 
    if(
       positions == 0 &&
@@ -371,6 +926,7 @@ bool CloseAllPositions()
 {
    bool success = true;
 
+
    for(
       int i = PositionsTotal() - 1;
       i >= 0;
@@ -380,12 +936,15 @@ bool CloseAllPositions()
       ulong ticket =
          PositionGetTicket(i);
 
+
       if(ticket <= 0)
          continue;
+
 
       if(!trade.PositionClose(ticket))
          success = false;
    }
+
 
    return success;
 }
@@ -400,25 +959,37 @@ void CheckBasketTakeProfit()
    if(!IsBasketActive())
       return;
 
+
    if(PositionsTotal() == 0)
       return;
 
-   double profit =
+
+   if(IsDailyTargetReached())
+      return;
+
+
+   double basket_profit =
       GetBasketProfit();
+
 
    double target =
       GetBasketTarget();
 
+
    if(target <= 0)
       return;
 
-   if(profit < target)
+
+   if(basket_profit < target)
       return;
+
 
    if(!AcquireCloseLock())
       return;
 
+
    CloseAllPositions();
+
 
    ReleaseCloseLock();
 }
@@ -432,6 +1003,7 @@ double GetCurrentSpreadPoints()
 {
    MqlTick tick;
 
+
    if(!SymbolInfoTick(
       _Symbol,
       tick
@@ -440,14 +1012,17 @@ double GetCurrentSpreadPoints()
       return 0.0;
    }
 
+
    double point =
       SymbolInfoDouble(
          _Symbol,
          SYMBOL_POINT
       );
 
+
    if(point <= 0)
       return 0.0;
+
 
    return
       (tick.ask - tick.bid) /
@@ -463,6 +1038,7 @@ double GetCurrentPrice()
 {
    MqlTick tick;
 
+
    if(!SymbolInfoTick(
       _Symbol,
       tick
@@ -470,6 +1046,7 @@ double GetCurrentPrice()
    {
       return 0.0;
    }
+
 
    return tick.ask;
 }
@@ -484,10 +1061,12 @@ double GetRiskAmount()
    if(risk_mode == RISK_MONEY)
       return risk_value;
 
+
    double balance =
       AccountInfoDouble(
          ACCOUNT_BALANCE
       );
+
 
    return
       balance *
@@ -497,9 +1076,6 @@ double GetRiskAmount()
 
 // ============================================================
 // NORMALIZE CALCULATED VOLUME
-//
-// Rounds to broker volume step but does NOT cap
-// the displayed calculation at the broker maximum.
 // ============================================================
 
 double NormalizeCalculatedVolume(
@@ -512,20 +1088,20 @@ double NormalizeCalculatedVolume(
          SYMBOL_VOLUME_STEP
       );
 
+
    if(step <= 0)
       return 0.0;
 
-   volume =
+
+   return
       MathFloor(
          volume / step
       ) * step;
-
-   return volume;
 }
 
 
 // ============================================================
-// GET STOP LOSS INPUT PRICE
+// STOP LOSS INPUT
 // ============================================================
 
 double GetStopLossInputPrice()
@@ -537,16 +1113,17 @@ double GetStopLossInputPrice()
          OBJPROP_TEXT
       );
 
+
    return
       StringToDouble(text);
 }
 
 
 // ============================================================
-// CREATE RED STOP LOSS LINE
+// CREATE STOP LOSS LINE
 //
-// VISUAL/CALCULATION ONLY.
-// IT NEVER SETS OR MODIFIES A BROKER STOP LOSS.
+// VISUAL / CALCULATION ONLY.
+// NEVER MODIFIES BROKER STOP LOSS.
 // ============================================================
 
 void CreateStopLossLine()
@@ -554,8 +1131,10 @@ void CreateStopLossLine()
    if(!sl_line_enabled)
       return;
 
+
    string name =
       "PSBM_SL_LINE";
+
 
    ObjectDelete(
       0,
@@ -567,18 +1146,18 @@ void CreateStopLossLine()
       GetStopLossInputPrice();
 
 
-   // If there is no valid typed SL yet,
-   // start 100 points below current Ask.
    if(sl_price <= 0)
    {
       double current_price =
          GetCurrentPrice();
+
 
       double point =
          SymbolInfoDouble(
             _Symbol,
             SYMBOL_POINT
          );
+
 
       if(
          current_price <= 0 ||
@@ -587,6 +1166,7 @@ void CreateStopLossLine()
       {
          return;
       }
+
 
       sl_price =
          current_price -
@@ -599,6 +1179,7 @@ void CreateStopLossLine()
          _Symbol,
          SYMBOL_DIGITS
       );
+
 
    sl_price =
       NormalizeDouble(
@@ -660,10 +1241,6 @@ void CreateStopLossLine()
    );
 
 
-   // IMPORTANT:
-   // Draw the line in the background.
-   // This prevents it from visually cutting through
-   // the manager panel.
    ObjectSetInteger(
       0,
       name,
@@ -688,7 +1265,6 @@ void CreateStopLossLine()
    );
 
 
-   // Synchronize the number with the line.
    ObjectSetString(
       0,
       "PSBM_SL_EDIT",
@@ -705,7 +1281,7 @@ void CreateStopLossLine()
 
 
 // ============================================================
-// DELETE ONLY THE STOP LOSS LINE
+// DELETE STOP LOSS LINE
 // ============================================================
 
 void DeleteStopLossLine()
@@ -715,12 +1291,13 @@ void DeleteStopLossLine()
       "PSBM_SL_LINE"
    );
 
+
    ChartRedraw();
 }
 
 
 // ============================================================
-// UPDATE SL LINE BUTTON
+// UPDATE STOP LOSS BUTTON
 // ============================================================
 
 void UpdateStopLossLineButton()
@@ -733,6 +1310,7 @@ void UpdateStopLossLineButton()
          OBJPROP_TEXT,
          "ON"
       );
+
 
       ObjectSetInteger(
          0,
@@ -750,6 +1328,7 @@ void UpdateStopLossLineButton()
          "OFF"
       );
 
+
       ObjectSetInteger(
          0,
          "PSBM_SL_LINE_BUTTON",
@@ -757,8 +1336,6 @@ void UpdateStopLossLineButton()
          C'90,55,55'
       );
    }
-
-   ChartRedraw();
 }
 
 
@@ -771,27 +1348,29 @@ void ToggleStopLossLine()
    sl_line_enabled =
       !sl_line_enabled;
 
+
    if(sl_line_enabled)
-   {
       CreateStopLossLine();
-   }
    else
-   {
       DeleteStopLossLine();
-   }
+
 
    UpdateStopLossLineButton();
+
+
+   ChartRedraw();
 }
 
 
 // ============================================================
-// RED LINE -> STOP LOSS INPUT
+// STOP LOSS LINE -> INPUT
 // ============================================================
 
 void UpdateStopLossFromLine()
 {
    if(!sl_line_enabled)
       return;
+
 
    if(
       ObjectFind(
@@ -842,7 +1421,7 @@ void UpdateStopLossFromLine()
 
 
 // ============================================================
-// STOP LOSS INPUT -> RED LINE
+// STOP LOSS INPUT -> LINE
 // ============================================================
 
 void UpdateStopLossLineFromInput()
@@ -863,8 +1442,6 @@ void UpdateStopLossLineFromInput()
       return;
 
 
-   // If the line is switched OFF, keep the typed
-   // SL value but do not create/move a line.
    if(!sl_line_enabled)
       return;
 
@@ -877,7 +1454,6 @@ void UpdateStopLossLineFromInput()
    )
    {
       CreateStopLossLine();
-
       return;
    }
 
@@ -922,45 +1498,33 @@ void UpdateStopLossLineFromInput()
 
 void CalculatePositionSize()
 {
-   string entry_text =
-      ObjectGetString(
-         0,
-         "PSBM_ENTRY_EDIT",
-         OBJPROP_TEXT
-      );
-
-
-   string stop_text =
-      ObjectGetString(
-         0,
-         "PSBM_SL_EDIT",
-         OBJPROP_TEXT
-      );
-
-
-   string risk_text =
-      ObjectGetString(
-         0,
-         "PSBM_RISK_EDIT",
-         OBJPROP_TEXT
-      );
-
-
    double entry =
       StringToDouble(
-         entry_text
+         ObjectGetString(
+            0,
+            "PSBM_ENTRY_EDIT",
+            OBJPROP_TEXT
+         )
       );
 
 
    double stop =
       StringToDouble(
-         stop_text
+         ObjectGetString(
+            0,
+            "PSBM_SL_EDIT",
+            OBJPROP_TEXT
+         )
       );
 
 
    double entered_risk =
       StringToDouble(
-         risk_text
+         ObjectGetString(
+            0,
+            "PSBM_RISK_EDIT",
+            OBJPROP_TEXT
+         )
       );
 
 
@@ -974,15 +1538,12 @@ void CalculatePositionSize()
 
    if(
       entry <= 0 ||
-      stop <= 0
+      stop <= 0 ||
+      entry == stop
    )
    {
       return;
    }
-
-
-   if(entry == stop)
-      return;
 
 
    double risk_amount =
@@ -1000,9 +1561,6 @@ void CalculatePositionSize()
 
    double one_lot_result =
       0.0;
-
-
-   ResetLastError();
 
 
    if(!OrderCalcProfit(
@@ -1053,16 +1611,6 @@ void CalculatePositionSize()
       );
 
 
-   string currency =
-      AccountInfoString(
-         ACCOUNT_CURRENCY
-      );
-
-
-   // ---------------------------------------------------------
-   // RISK AMOUNT
-   // ---------------------------------------------------------
-
    ObjectSetString(
       0,
       "PSBM_RISK_AMOUNT_VALUE",
@@ -1076,18 +1624,6 @@ void CalculatePositionSize()
 
    ObjectSetString(
       0,
-      "PSBM_RISK_AMOUNT_UNIT",
-      OBJPROP_TEXT,
-      currency
-   );
-
-
-   // ---------------------------------------------------------
-   // BROKER MAX
-   // ---------------------------------------------------------
-
-   ObjectSetString(
-      0,
       "PSBM_BROKER_MAX_VALUE",
       OBJPROP_TEXT,
       DoubleToString(
@@ -1096,10 +1632,6 @@ void CalculatePositionSize()
       )
    );
 
-
-   // ---------------------------------------------------------
-   // CALCULATED SIZE
-   // ---------------------------------------------------------
 
    if(
       calculated_volume <= 0 ||
@@ -1123,7 +1655,6 @@ void CalculatePositionSize()
 
 
       ChartRedraw();
-
       return;
    }
 
@@ -1139,8 +1670,6 @@ void CalculatePositionSize()
    );
 
 
-   // Orange warns that the mathematically required
-   // size exceeds the broker's maximum order size.
    if(calculated_volume > maximum)
    {
       ObjectSetInteger(
@@ -1166,7 +1695,7 @@ void CalculatePositionSize()
 
 
 // ============================================================
-// CREATE RECTANGLE
+// UI HELPERS
 // ============================================================
 
 void CreateRectangle(
@@ -1179,10 +1708,7 @@ void CreateRectangle(
    color border
 )
 {
-   ObjectDelete(
-      0,
-      name
-   );
+   ObjectDelete(0, name);
 
 
    ObjectCreate(
@@ -1260,10 +1786,6 @@ void CreateRectangle(
 }
 
 
-// ============================================================
-// CREATE LABEL
-// ============================================================
-
 void CreateLabel(
    string name,
    string text,
@@ -1273,10 +1795,7 @@ void CreateLabel(
    color text_color
 )
 {
-   ObjectDelete(
-      0,
-      name
-   );
+   ObjectDelete(0, name);
 
 
    ObjectCreate(
@@ -1362,10 +1881,6 @@ void CreateLabel(
 }
 
 
-// ============================================================
-// CREATE VALUE
-// ============================================================
-
 void CreateValue(
    string name,
    string text,
@@ -1376,17 +1891,13 @@ void CreateValue(
    CreateLabel(
       name,
       text,
-      VALUE_X,
+      ValueX(),
       y,
-      8,
+      FontSize(BASE_FONT_NORMAL),
       text_color
    );
 }
 
-
-// ============================================================
-// CREATE BUTTON
-// ============================================================
 
 void CreateButton(
    string name,
@@ -1398,10 +1909,7 @@ void CreateButton(
    color background
 )
 {
-   ObjectDelete(
-      0,
-      name
-   );
+   ObjectDelete(0, name);
 
 
    ObjectCreate(
@@ -1474,7 +1982,7 @@ void CreateButton(
       0,
       name,
       OBJPROP_FONTSIZE,
-      8
+      FontSize(BASE_FONT_NORMAL)
    );
 
 
@@ -1495,10 +2003,6 @@ void CreateButton(
 }
 
 
-// ============================================================
-// CREATE EDIT BOX
-// ============================================================
-
 void CreateEdit(
    string name,
    string text,
@@ -1507,10 +2011,7 @@ void CreateEdit(
    int width
 )
 {
-   ObjectDelete(
-      0,
-      name
-   );
+   ObjectDelete(0, name);
 
 
    ObjectCreate(
@@ -1551,7 +2052,7 @@ void CreateEdit(
       0,
       name,
       OBJPROP_YSIZE,
-      22
+      S(19)
    );
 
 
@@ -1583,7 +2084,7 @@ void CreateEdit(
       0,
       name,
       OBJPROP_FONTSIZE,
-      8
+      FontSize(BASE_FONT_NORMAL)
    );
 
 
@@ -1605,12 +2106,69 @@ void CreateEdit(
 
 
 // ============================================================
+// UPDATE PANEL BACKGROUND
+// ============================================================
+
+void UpdatePanelBackground()
+{
+   color panel_color =
+      C'25,28,35';
+
+
+   color header_color =
+      C'35,39,48';
+
+
+   if(IsDailyTargetReached())
+   {
+      panel_color =
+         C'25,75,50';
+
+
+      header_color =
+         C'30,95,60';
+   }
+   else if(
+      HasClosedTradesToday() &&
+      GetTodayClosedProfit() < 0
+   )
+   {
+      panel_color =
+         C'75,30,35';
+
+
+      header_color =
+         C'95,35,40';
+   }
+
+
+   ObjectSetInteger(
+      0,
+      "PSBM_PANEL",
+      OBJPROP_BGCOLOR,
+      panel_color
+   );
+
+
+   ObjectSetInteger(
+      0,
+      "PSBM_HEADER",
+      OBJPROP_BGCOLOR,
+      header_color
+   );
+}
+
+
+// ============================================================
 // CREATE PANEL
 // ============================================================
 
 void CreatePanel()
 {
-   string currency =
+   CalculatePanelScale();
+
+
+   string account_currency =
       AccountInfoString(
          ACCOUNT_CURRENCY
       );
@@ -1627,16 +2185,21 @@ void CreatePanel()
       GetCurrentPrice();
 
 
-   // ---------------------------------------------------------
-   // MAIN BACKGROUND
-   // ---------------------------------------------------------
+   int px = PanelX();
+   int py = PanelY();
+   int pw = PanelWidth();
+
+
+   // ========================================================
+   // MAIN PANEL
+   // ========================================================
 
    CreateRectangle(
       "PSBM_PANEL",
-      PANEL_X,
-      PANEL_Y,
-      PANEL_WIDTH,
-      PANEL_HEIGHT,
+      px,
+      py,
+      pw,
+      PanelHeight(),
       C'25,28,35',
       C'70,75,85'
    );
@@ -1644,10 +2207,10 @@ void CreatePanel()
 
    CreateRectangle(
       "PSBM_HEADER",
-      PANEL_X,
-      PANEL_Y,
-      PANEL_WIDTH,
-      48,
+      px,
+      py,
+      pw,
+      S(42),
       C'35,39,48',
       C'35,39,48'
    );
@@ -1656,19 +2219,19 @@ void CreatePanel()
    CreateLabel(
       "PSBM_TITLE",
       "POSITION SIZER & BASKET MANAGER",
-      LABEL_X,
-      PANEL_Y + 8,
-      9,
+      LabelX(),
+      py + S(6),
+      FontSize(BASE_FONT_TITLE),
       clrWhite
    );
 
 
    CreateLabel(
       "PSBM_SUBTITLE",
-      "Account-wide manual management",
-      LABEL_X,
-      PANEL_Y + 27,
-      7,
+      "Account-wide manual trade management",
+      LabelX(),
+      py + S(24),
+      FontSize(BASE_FONT_SMALL),
       C'160,165,175'
    );
 
@@ -1680,9 +2243,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_BASKET_TITLE",
       "BASKET TAKE PROFIT",
-      LABEL_X,
-      PANEL_Y + 62,
-      9,
+      LabelX(),
+      py + S(51),
+      FontSize(BASE_FONT_SECTION),
       C'90,180,255'
    );
 
@@ -1690,9 +2253,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_POSITIONS_LABEL",
       "Open Positions",
-      LABEL_X,
-      PANEL_Y + 88,
-      8,
+      LabelX(),
+      py + S(74),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1700,7 +2263,7 @@ void CreatePanel()
    CreateValue(
       "PSBM_POSITIONS_VALUE",
       "0",
-      PANEL_Y + 88,
+      py + S(74),
       clrWhite
    );
 
@@ -1708,9 +2271,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_PROFIT_LABEL",
       "Basket P/L",
-      LABEL_X,
-      PANEL_Y + 113,
-      8,
+      LabelX(),
+      py + S(94),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1718,96 +2281,35 @@ void CreatePanel()
    CreateValue(
       "PSBM_PROFIT_VALUE",
       "0.00",
-      PANEL_Y + 113,
+      py + S(94),
       clrWhite
    );
 
 
    CreateLabel(
       "PSBM_TP_MODE_LABEL",
-      "TP Mode",
-      LABEL_X,
-      PANEL_Y + 143,
-      8,
-      C'190,195,205'
-   );
-
-
-   string tp_mode_text =
-      "Percentage";
-
-
-   if(GetSharedTPMode() == TP_MONEY)
-      tp_mode_text = "Money";
-
-
-   CreateButton(
-      "PSBM_MODE_BUTTON",
-      tp_mode_text,
-      VALUE_X,
-      PANEL_Y + 136,
-      105,
-      22,
-      C'55,60,70'
-   );
-
-
-   CreateLabel(
-      "PSBM_TP_VALUE_LABEL",
-      "Target",
-      LABEL_X,
-      PANEL_Y + 173,
-      8,
-      C'190,195,205'
-   );
-
-
-   CreateEdit(
-      "PSBM_TARGET_EDIT",
-      DoubleToString(
-         GetSharedTPValue(),
-         2
-      ),
-      VALUE_X,
-      PANEL_Y + 166,
-      85
-   );
-
-
-   CreateLabel(
-      "PSBM_TARGET_UNIT",
-      "%",
-      UNIT_X,
-      PANEL_Y + 173,
-      8,
-      clrWhite
-   );
-
-
-   CreateLabel(
-      "PSBM_BALANCE_LABEL",
-      "Starting Balance",
-      LABEL_X,
-      PANEL_Y + 203,
-      8,
+      "TP Source",
+      LabelX(),
+      py + S(117),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
 
    CreateValue(
-      "PSBM_BALANCE_VALUE",
-      "0.00",
-      PANEL_Y + 203,
+      "PSBM_MODE_VALUE",
+      "Daily Target",
+      py + S(117),
       clrWhite
    );
 
 
    CreateLabel(
-      "PSBM_TARGET_LABEL",
-      "Profit Target",
-      LABEL_X,
-      PANEL_Y + 228,
-      8,
+      "PSBM_TP_VALUE_LABEL",
+      "Remaining Target",
+      LabelX(),
+      py + S(139),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1815,7 +2317,53 @@ void CreatePanel()
    CreateValue(
       "PSBM_TARGET_VALUE",
       "0.00",
-      PANEL_Y + 228,
+      py + S(139),
+      C'90,220,140'
+   );
+
+
+   CreateLabel(
+      "PSBM_TARGET_UNIT",
+      account_currency,
+      UnitX(),
+      py + S(140),
+      FontSize(BASE_FONT_SMALL),
+      C'160,165,175'
+   );
+
+
+   CreateLabel(
+      "PSBM_BALANCE_LABEL",
+      "Basket Start Balance",
+      LabelX(),
+      py + S(162),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateValue(
+      "PSBM_BALANCE_VALUE",
+      "0.00",
+      py + S(162),
+      clrWhite
+   );
+
+
+   CreateLabel(
+      "PSBM_EFFECTIVE_LABEL",
+      "Effective TP",
+      LabelX(),
+      py + S(183),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateValue(
+      "PSBM_EFFECTIVE_VALUE",
+      "0.00",
+      py + S(183),
       C'90,220,140'
    );
 
@@ -1823,10 +2371,10 @@ void CreatePanel()
    CreateButton(
       "PSBM_CLOSE_BUTTON",
       "CLOSE ALL TRADES",
-      LABEL_X,
-      PANEL_Y + 258,
-      PANEL_WIDTH - 28,
-      26,
+      LabelX(),
+      py + S(206),
+      pw - S(22),
+      S(22),
       C'145,55,55'
    );
 
@@ -1834,9 +2382,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_STATUS_LABEL",
       "STATUS",
-      LABEL_X,
-      PANEL_Y + 297,
-      7,
+      LabelX(),
+      py + S(238),
+      FontSize(BASE_FONT_SMALL),
       C'160,165,175'
    );
 
@@ -1844,19 +2392,188 @@ void CreatePanel()
    CreateValue(
       "PSBM_STATUS_VALUE",
       "WAITING",
-      PANEL_Y + 297,
+      py + S(238),
       C'255,190,80'
    );
 
 
+   // ========================================================
+   // DAILY PERFORMANCE
+   // ========================================================
+
    CreateRectangle(
-      "PSBM_DIVIDER",
-      LABEL_X,
-      PANEL_Y + 326,
-      PANEL_WIDTH - 28,
+      "PSBM_DAILY_DIVIDER",
+      LabelX(),
+      py + S(262),
+      pw - S(22),
       1,
       C'65,70,80',
       C'65,70,80'
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_TITLE",
+      "DAILY PERFORMANCE",
+      LabelX(),
+      py + S(275),
+      FontSize(BASE_FONT_SECTION),
+      C'90,180,255'
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_MODE_LABEL",
+      "Target Mode",
+      LabelX(),
+      py + S(299),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateButton(
+      "PSBM_DAILY_MODE_BUTTON",
+      "Percentage",
+      ValueX(),
+      py + S(293),
+      S(88),
+      S(19),
+      C'55,60,70'
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_TARGET_LABEL",
+      "Daily Target",
+      LabelX(),
+      py + S(323),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateEdit(
+      "PSBM_DAILY_TARGET_EDIT",
+      DoubleToString(
+         GetDailyTargetValue(),
+         2
+      ),
+      ValueX(),
+      py + S(317),
+      S(72)
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_TARGET_UNIT",
+      "%",
+      UnitX(),
+      py + S(324),
+      FontSize(BASE_FONT_SMALL),
+      clrWhite
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_CLOSED_LABEL",
+      "Closed P/L",
+      LabelX(),
+      py + S(347),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateValue(
+      "PSBM_DAILY_CLOSED_VALUE",
+      "0.00",
+      py + S(347),
+      clrWhite
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_CURRENCY",
+      account_currency,
+      UnitX(),
+      py + S(348),
+      FontSize(BASE_FONT_SMALL),
+      C'160,165,175'
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_PERCENT_LABEL",
+      "Closed P/L %",
+      LabelX(),
+      py + S(368),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateValue(
+      "PSBM_DAILY_PERCENT_VALUE",
+      "0.00",
+      py + S(368),
+      clrWhite
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_PERCENT_UNIT",
+      "%",
+      UnitX(),
+      py + S(369),
+      FontSize(BASE_FONT_SMALL),
+      C'160,165,175'
+   );
+
+
+   CreateLabel(
+      "PSBM_REMAINING_LABEL",
+      "Remaining Target",
+      LabelX(),
+      py + S(389),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateValue(
+      "PSBM_REMAINING_VALUE",
+      "0.00",
+      py + S(389),
+      C'255,190,80'
+   );
+
+
+   CreateLabel(
+      "PSBM_REMAINING_UNIT",
+      "%",
+      UnitX(),
+      py + S(390),
+      FontSize(BASE_FONT_SMALL),
+      C'160,165,175'
+   );
+
+
+   CreateLabel(
+      "PSBM_DAILY_STATUS_LABEL",
+      "Daily Status",
+      LabelX(),
+      py + S(410),
+      FontSize(BASE_FONT_NORMAL),
+      C'190,195,205'
+   );
+
+
+   CreateValue(
+      "PSBM_DAILY_STATUS_VALUE",
+      "IN PROGRESS",
+      py + S(410),
+      C'255,190,80'
    );
 
 
@@ -1864,12 +2581,23 @@ void CreatePanel()
    // POSITION SIZER
    // ========================================================
 
+   CreateRectangle(
+      "PSBM_SIZER_DIVIDER",
+      LabelX(),
+      py + S(434),
+      pw - S(22),
+      1,
+      C'65,70,80',
+      C'65,70,80'
+   );
+
+
    CreateLabel(
       "PSBM_SIZER_TITLE",
       "POSITION SIZER",
-      LABEL_X,
-      PANEL_Y + 342,
-      9,
+      LabelX(),
+      py + S(447),
+      FontSize(BASE_FONT_SECTION),
       C'90,180,255'
    );
 
@@ -1877,9 +2605,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_SYMBOL_LABEL",
       "Symbol",
-      LABEL_X,
-      PANEL_Y + 368,
-      8,
+      LabelX(),
+      py + S(471),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1887,7 +2615,7 @@ void CreatePanel()
    CreateValue(
       "PSBM_SYMBOL_VALUE",
       _Symbol,
-      PANEL_Y + 368,
+      py + S(471),
       clrWhite
    );
 
@@ -1895,9 +2623,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_SPREAD_LABEL",
       "Current Spread",
-      LABEL_X,
-      PANEL_Y + 393,
-      8,
+      LabelX(),
+      py + S(492),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1905,7 +2633,7 @@ void CreatePanel()
    CreateValue(
       "PSBM_SPREAD_VALUE",
       "0.0",
-      PANEL_Y + 393,
+      py + S(492),
       clrWhite
    );
 
@@ -1913,9 +2641,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_SPREAD_UNIT",
       "points",
-      UNIT_X,
-      PANEL_Y + 393,
-      7,
+      UnitX(),
+      py + S(493),
+      FontSize(BASE_FONT_SMALL),
       C'160,165,175'
    );
 
@@ -1923,9 +2651,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_RISK_MODE_LABEL",
       "Risk Mode",
-      LABEL_X,
-      PANEL_Y + 423,
-      8,
+      LabelX(),
+      py + S(515),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1933,10 +2661,10 @@ void CreatePanel()
    CreateButton(
       "PSBM_RISK_MODE_BUTTON",
       "Percentage",
-      VALUE_X,
-      PANEL_Y + 416,
-      105,
-      22,
+      ValueX(),
+      py + S(509),
+      S(88),
+      S(19),
       C'55,60,70'
    );
 
@@ -1944,9 +2672,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_RISK_LABEL",
       "Risk",
-      LABEL_X,
-      PANEL_Y + 453,
-      8,
+      LabelX(),
+      py + S(539),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1954,18 +2682,18 @@ void CreatePanel()
    CreateEdit(
       "PSBM_RISK_EDIT",
       "1.00",
-      VALUE_X,
-      PANEL_Y + 446,
-      85
+      ValueX(),
+      py + S(533),
+      S(72)
    );
 
 
    CreateLabel(
       "PSBM_RISK_UNIT",
       "%",
-      UNIT_X,
-      PANEL_Y + 453,
-      8,
+      UnitX(),
+      py + S(540),
+      FontSize(BASE_FONT_SMALL),
       clrWhite
    );
 
@@ -1973,9 +2701,9 @@ void CreatePanel()
    CreateLabel(
       "PSBM_ENTRY_LABEL",
       "Entry Price",
-      LABEL_X,
-      PANEL_Y + 483,
-      8,
+      LabelX(),
+      py + S(563),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -1986,18 +2714,18 @@ void CreatePanel()
          current_price,
          digits
       ),
-      VALUE_X,
-      PANEL_Y + 476,
-      105
+      ValueX(),
+      py + S(557),
+      S(88)
    );
 
 
    CreateLabel(
       "PSBM_SL_LABEL",
       "Stop Loss",
-      LABEL_X,
-      PANEL_Y + 513,
-      8,
+      LabelX(),
+      py + S(587),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -2005,22 +2733,18 @@ void CreatePanel()
    CreateEdit(
       "PSBM_SL_EDIT",
       "",
-      VALUE_X,
-      PANEL_Y + 506,
-      105
+      ValueX(),
+      py + S(581),
+      S(88)
    );
 
-
-   // ---------------------------------------------------------
-   // SL LINE ON/OFF
-   // ---------------------------------------------------------
 
    CreateLabel(
       "PSBM_SL_LINE_LABEL",
       "SL Line",
-      LABEL_X,
-      PANEL_Y + 543,
-      8,
+      LabelX(),
+      py + S(611),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -2028,24 +2752,20 @@ void CreatePanel()
    CreateButton(
       "PSBM_SL_LINE_BUTTON",
       "ON",
-      VALUE_X,
-      PANEL_Y + 536,
-      70,
-      22,
+      ValueX(),
+      py + S(605),
+      S(60),
+      S(19),
       C'45,105,75'
    );
 
 
-   // ---------------------------------------------------------
-   // RISK AMOUNT
-   // ---------------------------------------------------------
-
    CreateLabel(
       "PSBM_RISK_AMOUNT_LABEL",
       "Risk Amount",
-      LABEL_X,
-      PANEL_Y + 573,
-      8,
+      LabelX(),
+      py + S(635),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -2053,31 +2773,27 @@ void CreatePanel()
    CreateValue(
       "PSBM_RISK_AMOUNT_VALUE",
       "0.00",
-      PANEL_Y + 573,
+      py + S(635),
       clrWhite
    );
 
 
    CreateLabel(
       "PSBM_RISK_AMOUNT_UNIT",
-      currency,
-      UNIT_X,
-      PANEL_Y + 573,
-      7,
+      account_currency,
+      UnitX(),
+      py + S(636),
+      FontSize(BASE_FONT_SMALL),
       C'160,165,175'
    );
 
 
-   // ---------------------------------------------------------
-   // CALCULATED SIZE
-   // ---------------------------------------------------------
-
    CreateLabel(
       "PSBM_SIZE_LABEL",
       "Calculated Size",
-      LABEL_X,
-      PANEL_Y + 598,
-      8,
+      LabelX(),
+      py + S(656),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -2085,7 +2801,7 @@ void CreatePanel()
    CreateValue(
       "PSBM_SIZE_VALUE",
       "0.00",
-      PANEL_Y + 598,
+      py + S(656),
       C'90,220,140'
    );
 
@@ -2093,23 +2809,19 @@ void CreatePanel()
    CreateLabel(
       "PSBM_SIZE_UNIT",
       "lots",
-      UNIT_X,
-      PANEL_Y + 598,
-      7,
+      UnitX(),
+      py + S(657),
+      FontSize(BASE_FONT_SMALL),
       C'160,165,175'
    );
 
 
-   // ---------------------------------------------------------
-   // BROKER MAXIMUM
-   // ---------------------------------------------------------
-
    CreateLabel(
       "PSBM_BROKER_MAX_LABEL",
       "Broker Max",
-      LABEL_X,
-      PANEL_Y + 623,
-      8,
+      LabelX(),
+      py + S(677),
+      FontSize(BASE_FONT_NORMAL),
       C'190,195,205'
    );
 
@@ -2123,7 +2835,7 @@ void CreatePanel()
          ),
          2
       ),
-      PANEL_Y + 623,
+      py + S(677),
       clrWhite
    );
 
@@ -2131,46 +2843,158 @@ void CreatePanel()
    CreateLabel(
       "PSBM_BROKER_MAX_UNIT",
       "lots",
-      UNIT_X,
-      PANEL_Y + 623,
-      7,
+      UnitX(),
+      py + S(678),
+      FontSize(BASE_FONT_SMALL),
       C'160,165,175'
    );
 
 
-   // ---------------------------------------------------------
-   // CALCULATE
-   // ---------------------------------------------------------
+   // --------------------------------------------------------
+   // CALCULATE BUTTON
+   // --------------------------------------------------------
 
    CreateButton(
       "PSBM_CALCULATE_BUTTON",
       "CALCULATE",
-      LABEL_X,
-      PANEL_Y + 650,
-      PANEL_WIDTH - 28,
-      24,
+      LabelX(),
+      py + S(699),
+      pw - S(22),
+      S(21),
       C'45,105,155'
    );
 
 
-   // ---------------------------------------------------------
-   // SIGNATURE
-   // ---------------------------------------------------------
+   // --------------------------------------------------------
+   // AUTHOR
+   //
+   // Moved upward to provide proper bottom padding.
+   // --------------------------------------------------------
 
    CreateLabel(
       "PSBM_SIGNATURE",
       "By Tinashe Chimanikire",
-      LABEL_X,
-      PANEL_Y + 681,
-      7,
+      LabelX(),
+      py + S(724),
+      FontSize(BASE_FONT_SMALL),
       C'130,135,145'
    );
 
 
-   // Create the calculation-only red SL line.
    CreateStopLossLine();
 
+
    UpdateStopLossLineButton();
+
+
+   ChartRedraw();
+}
+
+
+// ============================================================
+// REBUILD RESPONSIVE PANEL
+// ============================================================
+
+void RebuildResponsivePanel()
+{
+   string daily_target =
+      ObjectGetString(
+         0,
+         "PSBM_DAILY_TARGET_EDIT",
+         OBJPROP_TEXT
+      );
+
+
+   string risk =
+      ObjectGetString(
+         0,
+         "PSBM_RISK_EDIT",
+         OBJPROP_TEXT
+      );
+
+
+   string entry =
+      ObjectGetString(
+         0,
+         "PSBM_ENTRY_EDIT",
+         OBJPROP_TEXT
+      );
+
+
+   string stop =
+      ObjectGetString(
+         0,
+         "PSBM_SL_EDIT",
+         OBJPROP_TEXT
+      );
+
+
+   if(StringToDouble(daily_target) > 0)
+   {
+      GlobalVariableSet(
+         GV_DAILY_TARGET,
+         StringToDouble(
+            daily_target
+         )
+      );
+   }
+
+
+   double old_stop =
+      StringToDouble(stop);
+
+
+   ObjectsDeleteAll(
+      0,
+      "PSBM_"
+   );
+
+
+   CalculatePanelScale();
+
+
+   CreatePanel();
+
+
+   if(StringToDouble(risk) > 0)
+   {
+      ObjectSetString(
+         0,
+         "PSBM_RISK_EDIT",
+         OBJPROP_TEXT,
+         risk
+      );
+   }
+
+
+   if(StringToDouble(entry) > 0)
+   {
+      ObjectSetString(
+         0,
+         "PSBM_ENTRY_EDIT",
+         OBJPROP_TEXT,
+         entry
+      );
+   }
+
+
+   if(old_stop > 0)
+   {
+      ObjectSetString(
+         0,
+         "PSBM_SL_EDIT",
+         OBJPROP_TEXT,
+         stop
+      );
+
+
+      if(sl_line_enabled)
+         UpdateStopLossLineFromInput();
+   }
+
+
+   UpdatePanel();
+
 
    ChartRedraw();
 }
@@ -2182,56 +3006,18 @@ void CreatePanel()
 
 void UpdatePanel()
 {
-   string currency =
+   string account_currency =
       AccountInfoString(
          ACCOUNT_CURRENCY
       );
 
 
-   // ---------------------------------------------------------
-   // TP MODE
-   // ---------------------------------------------------------
-
-   string mode_text;
+   UpdatePanelBackground();
 
 
-   if(GetSharedTPMode() == TP_PERCENTAGE)
-      mode_text = "Percentage";
-   else
-      mode_text = "Money";
-
-
-   ObjectSetString(
-      0,
-      "PSBM_MODE_BUTTON",
-      OBJPROP_TEXT,
-      mode_text
-   );
-
-
-   if(GetSharedTPMode() == TP_PERCENTAGE)
-   {
-      ObjectSetString(
-         0,
-         "PSBM_TARGET_UNIT",
-         OBJPROP_TEXT,
-         "%"
-      );
-   }
-   else
-   {
-      ObjectSetString(
-         0,
-         "PSBM_TARGET_UNIT",
-         OBJPROP_TEXT,
-         currency
-      );
-   }
-
-
-   // ---------------------------------------------------------
-   // OPEN POSITIONS
-   // ---------------------------------------------------------
+   // ========================================================
+   // BASKET
+   // ========================================================
 
    ObjectSetString(
       0,
@@ -2243,11 +3029,7 @@ void UpdatePanel()
    );
 
 
-   // ---------------------------------------------------------
-   // BASKET PROFIT
-   // ---------------------------------------------------------
-
-   double profit =
+   double basket_profit =
       GetBasketProfit();
 
 
@@ -2256,13 +3038,13 @@ void UpdatePanel()
       "PSBM_PROFIT_VALUE",
       OBJPROP_TEXT,
       DoubleToString(
-         profit,
+         basket_profit,
          2
       )
    );
 
 
-   if(profit > 0)
+   if(basket_profit > 0)
    {
       ObjectSetInteger(
          0,
@@ -2271,7 +3053,7 @@ void UpdatePanel()
          C'90,220,140'
       );
    }
-   else if(profit < 0)
+   else if(basket_profit < 0)
    {
       ObjectSetInteger(
          0,
@@ -2291,9 +3073,39 @@ void UpdatePanel()
    }
 
 
-   // ---------------------------------------------------------
-   // ACTIVE BASKET
-   // ---------------------------------------------------------
+   double remaining_money =
+      GetRemainingDailyTargetMoney();
+
+
+   ObjectSetString(
+      0,
+      "PSBM_TARGET_VALUE",
+      OBJPROP_TEXT,
+      DoubleToString(
+         remaining_money,
+         2
+      )
+   );
+
+
+   ObjectSetString(
+      0,
+      "PSBM_EFFECTIVE_VALUE",
+      OBJPROP_TEXT,
+      DoubleToString(
+         remaining_money,
+         2
+      )
+   );
+
+
+   ObjectSetString(
+      0,
+      "PSBM_TARGET_UNIT",
+      OBJPROP_TEXT,
+      account_currency
+   );
+
 
    if(IsBasketActive())
    {
@@ -2303,17 +3115,6 @@ void UpdatePanel()
          OBJPROP_TEXT,
          DoubleToString(
             GetBasketStartBalance(),
-            2
-         )
-      );
-
-
-      ObjectSetString(
-         0,
-         "PSBM_TARGET_VALUE",
-         OBJPROP_TEXT,
-         DoubleToString(
-            GetBasketTarget(),
             2
          )
       );
@@ -2333,40 +3134,12 @@ void UpdatePanel()
          OBJPROP_COLOR,
          C'90,220,140'
       );
-
-
-      ObjectSetInteger(
-         0,
-         "PSBM_MODE_BUTTON",
-         OBJPROP_BGCOLOR,
-         C'65,65,65'
-      );
-
-
-      ObjectSetInteger(
-         0,
-         "PSBM_TARGET_EDIT",
-         OBJPROP_BGCOLOR,
-         C'65,65,65'
-      );
    }
    else
    {
-      // ------------------------------------------------------
-      // WAITING
-      // ------------------------------------------------------
-
       ObjectSetString(
          0,
          "PSBM_BALANCE_VALUE",
-         OBJPROP_TEXT,
-         "0.00"
-      );
-
-
-      ObjectSetString(
-         0,
-         "PSBM_TARGET_VALUE",
          OBJPROP_TEXT,
          "0.00"
       );
@@ -2386,28 +3159,207 @@ void UpdatePanel()
          OBJPROP_COLOR,
          C'255,190,80'
       );
+   }
 
 
-      ObjectSetInteger(
+   // ========================================================
+   // DAILY PERFORMANCE
+   // ========================================================
+
+   if(
+      GetDailyTargetMode() ==
+      DAILY_PERCENTAGE
+   )
+   {
+      ObjectSetString(
          0,
-         "PSBM_MODE_BUTTON",
-         OBJPROP_BGCOLOR,
-         C'55,60,70'
+         "PSBM_DAILY_MODE_BUTTON",
+         OBJPROP_TEXT,
+         "Percentage"
       );
 
 
-      ObjectSetInteger(
+      ObjectSetString(
          0,
-         "PSBM_TARGET_EDIT",
-         OBJPROP_BGCOLOR,
-         C'45,49,58'
+         "PSBM_DAILY_TARGET_UNIT",
+         OBJPROP_TEXT,
+         "%"
+      );
+
+
+      ObjectSetString(
+         0,
+         "PSBM_REMAINING_UNIT",
+         OBJPROP_TEXT,
+         "%"
+      );
+
+
+      ObjectSetString(
+         0,
+         "PSBM_REMAINING_VALUE",
+         OBJPROP_TEXT,
+         DoubleToString(
+            GetRemainingDailyTargetPercent(),
+            2
+         )
+      );
+   }
+   else
+   {
+      ObjectSetString(
+         0,
+         "PSBM_DAILY_MODE_BUTTON",
+         OBJPROP_TEXT,
+         "Money"
+      );
+
+
+      ObjectSetString(
+         0,
+         "PSBM_DAILY_TARGET_UNIT",
+         OBJPROP_TEXT,
+         account_currency
+      );
+
+
+      ObjectSetString(
+         0,
+         "PSBM_REMAINING_UNIT",
+         OBJPROP_TEXT,
+         account_currency
+      );
+
+
+      ObjectSetString(
+         0,
+         "PSBM_REMAINING_VALUE",
+         OBJPROP_TEXT,
+         DoubleToString(
+            GetRemainingDailyTargetMoney(),
+            2
+         )
       );
    }
 
 
-   // ---------------------------------------------------------
-   // SYMBOL
-   // ---------------------------------------------------------
+   double daily_profit =
+      GetTodayClosedProfit();
+
+
+   double daily_percent =
+      GetTodayClosedProfitPercent();
+
+
+   ObjectSetString(
+      0,
+      "PSBM_DAILY_CLOSED_VALUE",
+      OBJPROP_TEXT,
+      DoubleToString(
+         daily_profit,
+         2
+      )
+   );
+
+
+   ObjectSetString(
+      0,
+      "PSBM_DAILY_PERCENT_VALUE",
+      OBJPROP_TEXT,
+      DoubleToString(
+         daily_percent,
+         2
+      )
+   );
+
+
+   color daily_color =
+      clrWhite;
+
+
+   if(daily_profit > 0)
+   {
+      daily_color =
+         C'90,220,140';
+   }
+   else if(daily_profit < 0)
+   {
+      daily_color =
+         C'255,100,100';
+   }
+
+
+   ObjectSetInteger(
+      0,
+      "PSBM_DAILY_CLOSED_VALUE",
+      OBJPROP_COLOR,
+      daily_color
+   );
+
+
+   ObjectSetInteger(
+      0,
+      "PSBM_DAILY_PERCENT_VALUE",
+      OBJPROP_COLOR,
+      daily_color
+   );
+
+
+   if(IsDailyTargetReached())
+   {
+      ObjectSetString(
+         0,
+         "PSBM_DAILY_STATUS_VALUE",
+         OBJPROP_TEXT,
+         "TARGET REACHED"
+      );
+
+
+      ObjectSetInteger(
+         0,
+         "PSBM_DAILY_STATUS_VALUE",
+         OBJPROP_COLOR,
+         C'90,220,140'
+      );
+
+
+      ObjectSetInteger(
+         0,
+         "PSBM_REMAINING_VALUE",
+         OBJPROP_COLOR,
+         C'90,220,140'
+      );
+   }
+   else
+   {
+      ObjectSetString(
+         0,
+         "PSBM_DAILY_STATUS_VALUE",
+         OBJPROP_TEXT,
+         "IN PROGRESS"
+      );
+
+
+      ObjectSetInteger(
+         0,
+         "PSBM_DAILY_STATUS_VALUE",
+         OBJPROP_COLOR,
+         C'255,190,80'
+      );
+
+
+      ObjectSetInteger(
+         0,
+         "PSBM_REMAINING_VALUE",
+         OBJPROP_COLOR,
+         C'255,190,80'
+      );
+   }
+
+
+   // ========================================================
+   // POSITION SIZER
+   // ========================================================
 
    ObjectSetString(
       0,
@@ -2416,10 +3368,6 @@ void UpdatePanel()
       _Symbol
    );
 
-
-   // ---------------------------------------------------------
-   // SPREAD
-   // ---------------------------------------------------------
 
    ObjectSetString(
       0,
@@ -2431,10 +3379,6 @@ void UpdatePanel()
       )
    );
 
-
-   // ---------------------------------------------------------
-   // BROKER MAX
-   // ---------------------------------------------------------
 
    ObjectSetString(
       0,
@@ -2452,6 +3396,7 @@ void UpdatePanel()
 
    UpdateStopLossLineButton();
 
+
    ChartRedraw();
 }
 
@@ -2467,9 +3412,20 @@ void OnChartEvent(
    const string &sparam
 )
 {
-   // ---------------------------------------------------------
-   // RED SL LINE DRAGGED
-   // ---------------------------------------------------------
+   // --------------------------------------------------------
+   // CHART RESIZE
+   // --------------------------------------------------------
+
+   if(id == CHARTEVENT_CHART_CHANGE)
+   {
+      RebuildResponsivePanel();
+      return;
+   }
+
+
+   // --------------------------------------------------------
+   // STOP LOSS LINE DRAG
+   // --------------------------------------------------------
 
    if(
       id == CHARTEVENT_OBJECT_DRAG &&
@@ -2477,60 +3433,57 @@ void OnChartEvent(
    )
    {
       UpdateStopLossFromLine();
-
       return;
    }
 
 
-   // ---------------------------------------------------------
-   // BUTTON CLICKS
-   // ---------------------------------------------------------
+   // --------------------------------------------------------
+   // BUTTONS
+   // --------------------------------------------------------
 
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
-      // ------------------------------------------------------
-      // BASKET TP MODE
-      // ------------------------------------------------------
+      // -----------------------------------------------------
+      // DAILY TARGET MODE
+      // -----------------------------------------------------
 
-      if(sparam == "PSBM_MODE_BUTTON")
+      if(sparam == "PSBM_DAILY_MODE_BUTTON")
       {
          ObjectSetInteger(
             0,
-            "PSBM_MODE_BUTTON",
+            "PSBM_DAILY_MODE_BUTTON",
             OBJPROP_STATE,
             false
          );
 
 
-         if(IsBasketActive())
-            return;
-
-
-         if(GetSharedTPMode() == TP_PERCENTAGE)
+         if(
+            GetDailyTargetMode() ==
+            DAILY_PERCENTAGE
+         )
          {
             GlobalVariableSet(
-               GV_TP_MODE,
-               (double)TP_MONEY
+               GV_DAILY_MODE,
+               (double)DAILY_MONEY
             );
          }
          else
          {
             GlobalVariableSet(
-               GV_TP_MODE,
-               (double)TP_PERCENTAGE
+               GV_DAILY_MODE,
+               (double)DAILY_PERCENTAGE
             );
          }
 
 
          UpdatePanel();
-
          return;
       }
 
 
-      // ------------------------------------------------------
+      // -----------------------------------------------------
       // RISK MODE
-      // ------------------------------------------------------
+      // -----------------------------------------------------
 
       if(sparam == "PSBM_RISK_MODE_BUTTON")
       {
@@ -2589,14 +3542,13 @@ void OnChartEvent(
 
 
          ChartRedraw();
-
          return;
       }
 
 
-      // ------------------------------------------------------
-      // SL LINE ON/OFF
-      // ------------------------------------------------------
+      // -----------------------------------------------------
+      // SL LINE
+      // -----------------------------------------------------
 
       if(sparam == "PSBM_SL_LINE_BUTTON")
       {
@@ -2609,14 +3561,13 @@ void OnChartEvent(
 
 
          ToggleStopLossLine();
-
          return;
       }
 
 
-      // ------------------------------------------------------
+      // -----------------------------------------------------
       // CALCULATE
-      // ------------------------------------------------------
+      // -----------------------------------------------------
 
       if(sparam == "PSBM_CALCULATE_BUTTON")
       {
@@ -2629,14 +3580,13 @@ void OnChartEvent(
 
 
          CalculatePositionSize();
-
          return;
       }
 
 
-      // ------------------------------------------------------
+      // -----------------------------------------------------
       // CLOSE ALL
-      // ------------------------------------------------------
+      // -----------------------------------------------------
 
       if(sparam == "PSBM_CLOSE_BUTTON")
       {
@@ -2661,67 +3611,42 @@ void OnChartEvent(
 
          ReleaseCloseLock();
 
+
          return;
       }
    }
 
 
-   // ---------------------------------------------------------
+   // --------------------------------------------------------
    // EDIT BOXES
-   // ---------------------------------------------------------
+   // --------------------------------------------------------
 
    if(id == CHARTEVENT_OBJECT_ENDEDIT)
    {
-      // ------------------------------------------------------
-      // BASKET TARGET
-      // ------------------------------------------------------
-
-      if(sparam == "PSBM_TARGET_EDIT")
+      if(sparam == "PSBM_DAILY_TARGET_EDIT")
       {
-         if(IsBasketActive())
-         {
-            ObjectSetString(
-               0,
-               "PSBM_TARGET_EDIT",
-               OBJPROP_TEXT,
-               DoubleToString(
-                  GetSharedTPValue(),
-                  2
-               )
-            );
-
-            return;
-         }
-
-
-         ReadBasketTarget();
+         ReadDailyTarget();
 
 
          ObjectSetString(
             0,
-            "PSBM_TARGET_EDIT",
+            "PSBM_DAILY_TARGET_EDIT",
             OBJPROP_TEXT,
             DoubleToString(
-               GetSharedTPValue(),
+               GetDailyTargetValue(),
                2
             )
          );
 
 
          UpdatePanel();
-
          return;
       }
 
 
-      // ------------------------------------------------------
-      // TYPED SL
-      // ------------------------------------------------------
-
       if(sparam == "PSBM_SL_EDIT")
       {
          UpdateStopLossLineFromInput();
-
          return;
       }
    }
@@ -2739,6 +3664,7 @@ void DeletePanel()
       "PSBM_"
    );
 
+
    ChartRedraw();
 }
 
@@ -2750,6 +3676,7 @@ void DeletePanel()
 int OnInit()
 {
    CreateGlobalVariableNames();
+
 
    InitializeSharedVariables();
 
@@ -2763,11 +3690,12 @@ int OnInit()
    }
 
 
+   CalculatePanelScale();
+
+
    CreatePanel();
 
 
-   // Account-wide basket monitoring does not depend
-   // only on ticks from this chart.
    EventSetTimer(1);
 
 
@@ -2788,6 +3716,7 @@ void OnDeinit(
 {
    EventKillTimer();
 
+
    DeletePanel();
 }
 
@@ -2800,7 +3729,9 @@ void ProcessEA()
 {
    UpdateBasketState();
 
+
    UpdatePanel();
+
 
    CheckBasketTakeProfit();
 }
