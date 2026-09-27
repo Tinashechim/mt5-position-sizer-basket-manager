@@ -1,7 +1,7 @@
 #include <Trade/Trade.mqh>
 
 #property copyright "Tinashe Chimanikire"
-#property version   "2.13"
+#property version   "2.20"
 #property strict
 
 CTrade trade;
@@ -14,7 +14,7 @@ CTrade trade;
 #define BASE_PANEL_X       12
 #define BASE_PANEL_Y       16
 #define BASE_PANEL_WIDTH   304
-#define BASE_PANEL_HEIGHT  722
+#define BASE_PANEL_HEIGHT  790
 
 #define BASE_LABEL_X       11
 #define BASE_VALUE_X       160
@@ -68,6 +68,12 @@ RiskMode risk_mode = RISK_PERCENTAGE;
 double risk_value = 1.0;
 
 bool sl_line_enabled = true;
+
+// Include estimated trading costs in planned risk.
+// FTMO ETHUSD test reference: 36.42 / 2.11 lots ≈ 17.26 per lot round trip.
+// This is an estimate and can be adjusted later for another broker/symbol.
+bool   risk_includes_costs = true;
+double estimated_round_trip_commission_per_lot = 17.26;
 
 
 // ============================================================
@@ -1546,6 +1552,253 @@ void UpdateStopLossLineFromInput()
 // CALCULATE POSITION SIZE
 // ============================================================
 
+double GetOneLotMarketLoss(
+   ENUM_ORDER_TYPE order_type,
+   double entry,
+   double stop
+)
+{
+   double result = 0.0;
+
+   if(!OrderCalcProfit(
+      order_type,
+      _Symbol,
+      1.0,
+      entry,
+      stop,
+      result
+   ))
+      return 0.0;
+
+   return MathAbs(result);
+}
+
+
+double GetPlannedLossPerLot(
+   ENUM_ORDER_TYPE order_type,
+   double entry,
+   double stop
+)
+{
+   double market_loss =
+      GetOneLotMarketLoss(
+         order_type,
+         entry,
+         stop
+      );
+
+   if(market_loss <= 0.0)
+      return 0.0;
+
+   if(!risk_includes_costs)
+      return market_loss;
+
+   return
+      market_loss +
+      MathMax(
+         0.0,
+         estimated_round_trip_commission_per_lot
+      );
+}
+
+
+double NormalizeExecutableVolume(double volume)
+{
+   double step =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_VOLUME_STEP
+      );
+
+   double minimum =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_VOLUME_MIN
+      );
+
+   double maximum =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_VOLUME_MAX
+      );
+
+   if(
+      step <= 0.0 ||
+      minimum <= 0.0 ||
+      maximum <= 0.0
+   )
+      return 0.0;
+
+   double normalized =
+      MathFloor(volume / step) *
+      step;
+
+   normalized =
+      NormalizeDouble(
+         normalized,
+         8
+      );
+
+   if(normalized < minimum)
+      return 0.0;
+
+   // Never silently cap the user's risk.
+   if(normalized > maximum)
+      return -1.0;
+
+   return normalized;
+}
+
+
+bool ValidateBrokerStopDistance(
+   ENUM_ORDER_TYPE order_type,
+   double entry,
+   double stop
+)
+{
+   double point =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_POINT
+      );
+
+   if(point <= 0.0)
+      return false;
+
+   double minimum_distance =
+      (double)SymbolInfoInteger(
+         _Symbol,
+         SYMBOL_TRADE_STOPS_LEVEL
+      ) *
+      point;
+
+   if(order_type == ORDER_TYPE_BUY)
+   {
+      if(stop >= entry)
+         return false;
+
+      if(entry - stop < minimum_distance)
+         return false;
+   }
+   else
+   {
+      if(stop <= entry)
+         return false;
+
+      if(stop - entry < minimum_distance)
+         return false;
+   }
+
+   return true;
+}
+
+
+void UpdateTradeCalculationDisplay(
+   ENUM_ORDER_TYPE order_type,
+   double entry,
+   double stop,
+   double risk_amount,
+   double calculated_volume
+)
+{
+   double required_margin = 0.0;
+
+   if(calculated_volume > 0.0)
+   {
+      if(!OrderCalcMargin(
+         order_type,
+         _Symbol,
+         calculated_volume,
+         entry,
+         required_margin
+      ))
+      {
+         required_margin = 0.0;
+      }
+   }
+
+   double minimum =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_VOLUME_MIN
+      );
+
+   double maximum =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_VOLUME_MAX
+      );
+
+   ObjectSetString(
+      0,
+      "PSBM_RISK_AMOUNT_VALUE",
+      OBJPROP_TEXT,
+      DoubleToString(risk_amount, 2)
+   );
+
+   ObjectSetString(
+      0,
+      "PSBM_BROKER_MAX_VALUE",
+      OBJPROP_TEXT,
+      DoubleToString(maximum, 2)
+   );
+
+   ObjectSetString(
+      0,
+      "PSBM_MARGIN_VALUE",
+      OBJPROP_TEXT,
+      DoubleToString(required_margin, 2)
+   );
+
+   ObjectSetString(
+      0,
+      "PSBM_MARGIN_UNIT",
+      OBJPROP_TEXT,
+      AccountInfoString(ACCOUNT_CURRENCY)
+   );
+
+   if(
+      calculated_volume <= 0.0 ||
+      calculated_volume < minimum
+   )
+   {
+      ObjectSetString(
+         0,
+         "PSBM_SIZE_VALUE",
+         OBJPROP_TEXT,
+         "Below min"
+      );
+
+      ObjectSetInteger(
+         0,
+         "PSBM_SIZE_VALUE",
+         OBJPROP_COLOR,
+         C'255,190,80'
+      );
+   }
+   else
+   {
+      ObjectSetString(
+         0,
+         "PSBM_SIZE_VALUE",
+         OBJPROP_TEXT,
+         DoubleToString(calculated_volume, 2)
+      );
+
+      ObjectSetInteger(
+         0,
+         "PSBM_SIZE_VALUE",
+         OBJPROP_COLOR,
+         calculated_volume > maximum
+         ? C'255,190,80'
+         : C'90,220,140'
+      );
+   }
+
+   ChartRedraw();
+}
+
+
 void CalculatePositionSize()
 {
    double entry =
@@ -1557,7 +1810,6 @@ void CalculatePositionSize()
          )
       );
 
-
    double stop =
       StringToDouble(
          ObjectGetString(
@@ -1566,7 +1818,6 @@ void CalculatePositionSize()
             OBJPROP_TEXT
          )
       );
-
 
    double entered_risk =
       StringToDouble(
@@ -1577,203 +1828,264 @@ void CalculatePositionSize()
          )
       );
 
-
-   if(entered_risk <= 0)
-      return;
-
-
-   risk_value =
-      entered_risk;
-
-
    if(
-      entry <= 0 ||
-      stop <= 0 ||
+      entered_risk <= 0.0 ||
+      entry <= 0.0 ||
+      stop <= 0.0 ||
       entry == stop
    )
-   {
       return;
-   }
 
+   risk_value = entered_risk;
 
    double risk_amount =
       GetRiskAmount();
 
+   ENUM_ORDER_TYPE order_type =
+      stop < entry
+      ? ORDER_TYPE_BUY
+      : ORDER_TYPE_SELL;
 
-   ENUM_ORDER_TYPE order_type;
-
-
-   if(stop < entry)
-      order_type = ORDER_TYPE_BUY;
-   else
-      order_type = ORDER_TYPE_SELL;
-
-
-   double one_lot_result =
-      0.0;
-
-
-   if(!OrderCalcProfit(
-      order_type,
-      _Symbol,
-      1.0,
-      entry,
-      stop,
-      one_lot_result
-   ))
-   {
-      return;
-   }
-
-
-   double one_lot_loss =
-      MathAbs(
-         one_lot_result
+   double planned_loss_per_lot =
+      GetPlannedLossPerLot(
+         order_type,
+         entry,
+         stop
       );
 
-
-   if(one_lot_loss <= 0)
+   if(planned_loss_per_lot <= 0.0)
       return;
-
-
-   double raw_volume =
-      risk_amount /
-      one_lot_loss;
-
 
    double calculated_volume =
       NormalizeCalculatedVolume(
-         raw_volume
+         risk_amount /
+         planned_loss_per_lot
       );
 
+   UpdateTradeCalculationDisplay(
+      order_type,
+      entry,
+      stop,
+      risk_amount,
+      calculated_volume
+   );
+}
 
-   double required_margin = 0.0;
 
-   if(calculated_volume > 0)
+void ExecutePanelTrade(ENUM_ORDER_TYPE order_type)
+{
+   MqlTick tick;
+
+   if(!SymbolInfoTick(_Symbol, tick))
    {
-      double margin_price = entry;
-
-      if(!OrderCalcMargin(
-         order_type,
-         _Symbol,
-         calculated_volume,
-         margin_price,
-         required_margin
-      ))
-      {
-         required_margin = 0.0;
-      }
-   }
-
-
-   ObjectSetString(
-      0,
-      "PSBM_MARGIN_VALUE",
-      OBJPROP_TEXT,
-      DoubleToString(required_margin, 2)
-   );
-
-
-   ObjectSetString(
-      0,
-      "PSBM_MARGIN_UNIT",
-      OBJPROP_TEXT,
-      AccountInfoString(ACCOUNT_CURRENCY)
-   );
-
-
-   double minimum =
-      SymbolInfoDouble(
-         _Symbol,
-         SYMBOL_VOLUME_MIN
-      );
-
-
-   double maximum =
-      SymbolInfoDouble(
-         _Symbol,
-         SYMBOL_VOLUME_MAX
-      );
-
-
-   ObjectSetString(
-      0,
-      "PSBM_RISK_AMOUNT_VALUE",
-      OBJPROP_TEXT,
-      DoubleToString(
-         risk_amount,
-         2
-      )
-   );
-
-
-   ObjectSetString(
-      0,
-      "PSBM_BROKER_MAX_VALUE",
-      OBJPROP_TEXT,
-      DoubleToString(
-         maximum,
-         2
-      )
-   );
-
-
-   if(
-      calculated_volume <= 0 ||
-      calculated_volume < minimum
-   )
-   {
-      ObjectSetString(
-         0,
-         "PSBM_SIZE_VALUE",
-         OBJPROP_TEXT,
-         "Below min"
-      );
-
-
-      ObjectSetInteger(
-         0,
-         "PSBM_SIZE_VALUE",
-         OBJPROP_COLOR,
-         C'255,190,80'
-      );
-
-
-      ChartRedraw();
+      Print("PSBM MT5: Could not read current market price.");
       return;
    }
 
+   double stop =
+      StringToDouble(
+         ObjectGetString(
+            0,
+            "PSBM_SL_EDIT",
+            OBJPROP_TEXT
+         )
+      );
+
+   double entered_risk =
+      StringToDouble(
+         ObjectGetString(
+            0,
+            "PSBM_RISK_EDIT",
+            OBJPROP_TEXT
+         )
+      );
+
+   if(stop <= 0.0 || entered_risk <= 0.0)
+      return;
+
+   risk_value = entered_risk;
+
+   double entry =
+      order_type == ORDER_TYPE_BUY
+      ? tick.ask
+      : tick.bid;
+
+   if(entry <= 0.0)
+      return;
+
+   if(!ValidateBrokerStopDistance(
+      order_type,
+      entry,
+      stop
+   ))
+   {
+      Print(
+         "PSBM MT5: Invalid Stop Loss for ",
+         order_type == ORDER_TYPE_BUY ? "BUY" : "SELL",
+         ". Entry=",
+         DoubleToString(entry, _Digits),
+         " SL=",
+         DoubleToString(stop, _Digits)
+      );
+      return;
+   }
+
+   double risk_amount =
+      GetRiskAmount();
+
+   double planned_loss_per_lot =
+      GetPlannedLossPerLot(
+         order_type,
+         entry,
+         stop
+      );
+
+   if(planned_loss_per_lot <= 0.0)
+      return;
+
+   double volume =
+      NormalizeExecutableVolume(
+         risk_amount /
+         planned_loss_per_lot
+      );
+
+   if(volume == -1.0)
+   {
+      Print("PSBM MT5: Required volume exceeds broker maximum.");
+      return;
+   }
+
+   if(volume <= 0.0)
+   {
+      Print("PSBM MT5: Required volume is below broker minimum.");
+      return;
+   }
+
+   UpdateTradeCalculationDisplay(
+      order_type,
+      entry,
+      stop,
+      risk_amount,
+      volume
+   );
+
+   // Refresh the market price immediately before execution and
+   // recalculate the volume from the executable side of the market.
+   if(!SymbolInfoTick(_Symbol, tick))
+      return;
+
+   entry =
+      order_type == ORDER_TYPE_BUY
+      ? tick.ask
+      : tick.bid;
+
+   if(!ValidateBrokerStopDistance(
+      order_type,
+      entry,
+      stop
+   ))
+      return;
+
+   planned_loss_per_lot =
+      GetPlannedLossPerLot(
+         order_type,
+         entry,
+         stop
+      );
+
+   if(planned_loss_per_lot <= 0.0)
+      return;
+
+   volume =
+      NormalizeExecutableVolume(
+         risk_amount /
+         planned_loss_per_lot
+      );
+
+   if(volume <= 0.0)
+      return;
+
+   trade.SetDeviationInPoints(10);
+   trade.SetTypeFillingBySymbol(_Symbol);
+
+   bool sent = false;
+
+   if(order_type == ORDER_TYPE_BUY)
+   {
+      sent =
+         trade.Buy(
+            volume,
+            _Symbol,
+            0.0,
+            NormalizeDouble(stop, _Digits),
+            0.0,
+            "PSBM"
+         );
+   }
+   else
+   {
+      sent =
+         trade.Sell(
+            volume,
+            _Symbol,
+            0.0,
+            NormalizeDouble(stop, _Digits),
+            0.0,
+            "PSBM"
+         );
+   }
+
+   if(!sent)
+   {
+      Print(
+         "PSBM MT5: Trade execution failed. Retcode=",
+         trade.ResultRetcode(),
+         " ",
+         trade.ResultRetcodeDescription()
+      );
+      return;
+   }
+
+   double confirmed_entry =
+      trade.ResultPrice();
+
+   if(confirmed_entry <= 0.0)
+      confirmed_entry = entry;
+
+   ObjectSetString(
+      0,
+      "PSBM_ENTRY_EDIT",
+      OBJPROP_TEXT,
+      DoubleToString(
+         confirmed_entry,
+         _Digits
+      )
+   );
+
+   ObjectSetString(
+      0,
+      "PSBM_SL_EDIT",
+      OBJPROP_TEXT,
+      DoubleToString(
+         stop,
+         _Digits
+      )
+   );
 
    ObjectSetString(
       0,
       "PSBM_SIZE_VALUE",
       OBJPROP_TEXT,
-      DoubleToString(
-         calculated_volume,
-         2
-      )
+      DoubleToString(volume, 2)
    );
 
-
-   if(calculated_volume > maximum)
-   {
-      ObjectSetInteger(
-         0,
-         "PSBM_SIZE_VALUE",
-         OBJPROP_COLOR,
-         C'255,190,80'
-      );
-   }
-   else
-   {
-      ObjectSetInteger(
-         0,
-         "PSBM_SIZE_VALUE",
-         OBJPROP_COLOR,
-         C'90,220,140'
-      );
-   }
-
+   UpdateTradeCalculationDisplay(
+      order_type,
+      confirmed_entry,
+      stop,
+      risk_amount,
+      volume
+   );
 
    ChartRedraw();
 }
@@ -2439,11 +2751,41 @@ void CreatePanel()
    CreateLabel("PSBM_MARGIN_UNIT", account_currency,
                UnitX(), py + S(653), FontSize(BASE_FONT_SMALL), C'160,165,175');
 
+   CreateButton(
+      "PSBM_RISK_COSTS_BUTTON",
+      risk_includes_costs ? "RISK COSTS: ON" : "RISK COSTS: OFF",
+      LabelX(),
+      py + S(676),
+      pw - S(22),
+      S(21),
+      risk_includes_costs ? C'45,115,75' : C'80,80,85'
+   );
+
    CreateButton("PSBM_CALCULATE_BUTTON", "CALCULATE",
-                LabelX(), py + S(676), pw - S(22), S(21), C'45,105,155');
+                LabelX(), py + S(702), pw - S(22), S(21), C'45,105,155');
+
+   CreateButton(
+      "PSBM_BUY_BUTTON",
+      "BUY",
+      LabelX(),
+      py + S(728),
+      S(132),
+      S(22),
+      C'45,115,75'
+   );
+
+   CreateButton(
+      "PSBM_SELL_BUTTON",
+      "SELL",
+      LabelX() + S(138),
+      py + S(728),
+      S(132),
+      S(22),
+      C'120,60,60'
+   );
 
    CreateLabel("PSBM_SIGNATURE", "By Tinashe Chimanikire",
-               LabelX(), py + S(704), FontSize(BASE_FONT_SMALL), C'130,135,145');
+               LabelX(), py + S(758), FontSize(BASE_FONT_SMALL), C'130,135,145');
 
 
    CreateStopLossLine();
@@ -2993,9 +3335,9 @@ void OnChartEvent(
 
 
          if(sparam == "PSBM_SCALE_MINUS")
-            manual_panel_scale -= 0.10;
+            manual_panel_scale -= 0.01;
          else
-            manual_panel_scale += 0.10;
+            manual_panel_scale += 0.01;
 
 
          if(manual_panel_scale < 0.50)
@@ -3146,6 +3488,59 @@ void OnChartEvent(
 
 
          ToggleStopLossLine();
+         return;
+      }
+
+
+      // -----------------------------------------------------
+      // INCLUDE / EXCLUDE ESTIMATED COMMISSION FROM TOTAL RISK
+      // -----------------------------------------------------
+
+      if(sparam == "PSBM_RISK_COSTS_BUTTON")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+
+         risk_includes_costs =
+            !risk_includes_costs;
+
+         ObjectSetString(
+            0,
+            "PSBM_RISK_COSTS_BUTTON",
+            OBJPROP_TEXT,
+            risk_includes_costs
+            ? "RISK COSTS: ON"
+            : "RISK COSTS: OFF"
+         );
+
+         ObjectSetInteger(
+            0,
+            "PSBM_RISK_COSTS_BUTTON",
+            OBJPROP_BGCOLOR,
+            risk_includes_costs
+            ? C'45,115,75'
+            : C'80,80,85'
+         );
+
+         ChartRedraw();
+         return;
+      }
+
+
+      // -----------------------------------------------------
+      // EXECUTE BUY / SELL FROM PANEL
+      // -----------------------------------------------------
+
+      if(sparam == "PSBM_BUY_BUTTON")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ExecutePanelTrade(ORDER_TYPE_BUY);
+         return;
+      }
+
+      if(sparam == "PSBM_SELL_BUTTON")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ExecutePanelTrade(ORDER_TYPE_SELL);
          return;
       }
 
