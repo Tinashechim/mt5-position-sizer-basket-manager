@@ -1,7 +1,7 @@
 #include <Trade/Trade.mqh>
 
 #property copyright "Tinashe Chimanikire"
-#property version   "2.11"
+#property version   "2.13"
 #property strict
 
 CTrade trade;
@@ -27,6 +27,8 @@ CTrade trade;
 
 
 double panel_scale = 1.0;
+double auto_panel_scale = 1.0;
+double manual_panel_scale = 1.0;
 
 
 // ============================================================
@@ -54,6 +56,7 @@ string GV_CLOSE_LOCK;
 
 string GV_DAILY_MODE;
 string GV_DAILY_TARGET;
+string GV_PANEL_SCALE;
 
 
 // ============================================================
@@ -135,13 +138,15 @@ int UnitX()
 
 int FontSize(int base_size)
 {
+   // Text is 20% larger than the previous baseline and
+   // continues to grow/shrink with the whole panel.
    int size =
       (int)MathRound(
-         base_size * panel_scale
+         base_size * 1.20 * panel_scale
       );
 
-   if(size < 5)
-      size = 5;
+   if(size < 4)
+      size = 4;
 
    return size;
 }
@@ -172,7 +177,8 @@ void CalculatePanelScale()
       chart_height <= 0
    )
    {
-      panel_scale = 1.0;
+      auto_panel_scale = 1.0;
+      panel_scale = manual_panel_scale;
       return;
    }
 
@@ -201,19 +207,33 @@ void CalculatePanelScale()
       );
 
 
-   panel_scale =
+   auto_panel_scale =
       MathMin(
          width_scale,
          height_scale
       );
 
 
-   if(panel_scale > 1.0)
-      panel_scale = 1.0;
+   if(auto_panel_scale > 1.0)
+      auto_panel_scale = 1.0;
 
 
-   if(panel_scale < 0.50)
-      panel_scale = 0.50;
+   if(auto_panel_scale < 0.50)
+      auto_panel_scale = 0.50;
+
+
+   // Manual scale adjusts the automatically fitted size.
+   panel_scale =
+      auto_panel_scale *
+      manual_panel_scale;
+
+
+   if(panel_scale < 0.25)
+      panel_scale = 0.25;
+
+
+   if(panel_scale > 1.50)
+      panel_scale = 1.50;
 }
 
 
@@ -245,6 +265,10 @@ void CreateGlobalVariableNames()
 
    GV_DAILY_TARGET =
       prefix + "DAILY_TARGET";
+
+
+   GV_PANEL_SCALE =
+      prefix + "PANEL_SCALE";
 }
 
 
@@ -273,6 +297,27 @@ void InitializeSharedVariables()
          GV_DAILY_TARGET,
          5.0
       );
+
+
+   if(!GlobalVariableCheck(GV_PANEL_SCALE))
+      GlobalVariableSet(
+         GV_PANEL_SCALE,
+         1.0
+      );
+
+
+   manual_panel_scale =
+      GlobalVariableGet(
+         GV_PANEL_SCALE
+      );
+
+
+   if(manual_panel_scale < 0.50)
+      manual_panel_scale = 0.50;
+
+
+   if(manual_panel_scale > 1.50)
+      manual_panel_scale = 1.50;
 }
 
 
@@ -2233,6 +2278,18 @@ void CreatePanel()
    CreateLabel("PSBM_SUBTITLE", "Account-wide manual trade management",
                LabelX(), py + S(24), FontSize(BASE_FONT_SMALL), C'160,165,175');
 
+   // Manual panel scaling. Automatic monitor/chart fitting remains active,
+   // while these controls let the user fine-tune the result.
+   CreateButton("PSBM_SCALE_MINUS", "-",
+                px + S(216), py + S(22), S(18), S(17), C'55,60,70');
+
+   CreateLabel("PSBM_SCALE_VALUE",
+               IntegerToString((int)MathRound(manual_panel_scale * 100.0)) + "%",
+               px + S(237), py + S(25), FontSize(BASE_FONT_SMALL), C'200,205,215');
+
+   CreateButton("PSBM_SCALE_PLUS", "+",
+                px + S(276), py + S(22), S(18), S(17), C'55,60,70');
+
    // CURRENT BASKET
    CreateLabel("PSBM_BASKET_TITLE", "CURRENT BASKET",
                LabelX(), py + S(51), FontSize(BASE_FONT_SECTION), C'90,180,255');
@@ -2918,6 +2975,48 @@ void OnChartEvent(
 
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
+      // -----------------------------------------------------
+      // MANUAL PANEL SCALE
+      // -----------------------------------------------------
+
+      if(
+         sparam == "PSBM_SCALE_MINUS" ||
+         sparam == "PSBM_SCALE_PLUS"
+      )
+      {
+         ObjectSetInteger(
+            0,
+            sparam,
+            OBJPROP_STATE,
+            false
+         );
+
+
+         if(sparam == "PSBM_SCALE_MINUS")
+            manual_panel_scale -= 0.10;
+         else
+            manual_panel_scale += 0.10;
+
+
+         if(manual_panel_scale < 0.50)
+            manual_panel_scale = 0.50;
+
+
+         if(manual_panel_scale > 1.50)
+            manual_panel_scale = 1.50;
+
+
+         GlobalVariableSet(
+            GV_PANEL_SCALE,
+            manual_panel_scale
+         );
+
+
+         RebuildResponsivePanel();
+         return;
+      }
+
+
       // -----------------------------------------------------
       // DAILY TARGET MODE
       // -----------------------------------------------------
