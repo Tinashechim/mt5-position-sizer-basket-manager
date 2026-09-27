@@ -1,125 +1,210 @@
 # MT5 Position Sizer & Basket Manager
 
-An Expert Advisor (EA) for MetaTrader 5 designed to help manage manual trades through risk-based position sizing, visual stop-loss calculations, daily profit targets, session-separated basket management, and multi-day carry-over position tracking.
+A MetaTrader 5 Expert Advisor for position sizing, panel-based trade execution, risk management, daily profit targets, and multi-session basket management.
 
-The EA does not place trades automatically. It is designed to assist with positions opened manually by the trader.
+Developed by Tinashe Chimanikire.
 
 ## Features
 
-- Percentage-based or fixed-money risk calculation
-- Automatic position-size calculation
-- Displays the calculated lot size without artificially capping it to the broker maximum
-- Displays the broker's maximum allowed lot size separately
-- Calculates required margin using MetaTrader 5's margin calculation
-- Displays the current spread
-- Visual draggable stop-loss line
-- Automatically adds the current spread to the entered stop-loss level
-- Automatically adds the current spread after manually moving the stop-loss line
-- Does not create or modify the broker's actual stop loss
-- Percentage-based or fixed-money daily profit targets
-- Tracks realised and floating profit/loss
-- Session-separated basket management
-- Multi-day carry-over position management
-- Automatic basket closing when a session target is reached
-- Responsive chart panel
-- Manual panel scaling from 50% to 150%
-- Multi-chart/account-wide shared settings
-- Session boundary at 23:30 broker/server time
-
-## How It Works
-
 ### Position Sizer
 
-The Position Sizer helps calculate the appropriate trade size before manually opening a position.
+The EA calculates position size using:
 
-1. Select the risk mode:
-   - `Percentage` — risk a percentage of the account balance.
-   - `Money` — risk a fixed amount of money.
-
-2. Enter the amount or percentage you want to risk.
-
-3. Enter the intended entry price.
-
-4. Enter your intended stop-loss price or move the visual SL line on the chart.
-
-5. The EA automatically adds the current spread to the stop-loss level.
-
-6. Click `CALCULATE`.
+- Percentage risk
+- Fixed-money risk
+- Executable market price
+- Stop Loss
+- Symbol tick size and tick value
+- Broker minimum, maximum, and volume step
 
 The panel displays:
 
+- Spread
 - Risk Amount
 - Calculated Size
 - Broker Max
 - Required Margin
-- Current Spread
 
-The calculated size is informational. The EA does not automatically open the position.
+The calculated position size remains informational and is not silently capped to the broker maximum.
 
-### Visual Stop-Loss Line
+## Panel Trade Execution
 
-The SL line is a calculation tool only.
+Trades can be opened directly from the EA panel.
 
-You can either:
+- BUY uses the current Ask price
+- SELL uses the current Bid price
+- Position size is recalculated immediately before execution
+- The Stop Loss is submitted as an actual broker Stop Loss
+- Trades above the broker's maximum volume are rejected rather than silently capped
 
-- Type a stop-loss price into the Stop Loss field, or
-- Drag the SL line directly on the chart.
+## Stop Loss Line
 
-The current spread is automatically added to the selected stop-loss level.
+The chart includes a draggable red Stop Loss line.
 
-The adjusted stop-loss price is then displayed in the Stop Loss field and used for the position-size calculation.
+The Stop Loss can be changed using either:
 
-The spread is added once when the SL is entered or moved. Resizing or scaling the panel does not repeatedly add the spread.
+- The Stop Loss input field
+- The draggable SL line
 
-**Important:** The EA does not create, move, or delete the actual broker stop loss on your position. You remain responsible for setting the real stop loss when placing or managing your position.
+The line represents the actual intended broker Stop Loss price.
 
-### Daily Profit Target
+It can also be shown or hidden from the panel.
 
-The Daily Performance section allows the target to be specified as either:
+## Cost-Aware Risk
 
-- A percentage, or
-- A fixed monetary amount.
+The `RISK COSTS: ON/OFF` control determines whether estimated trading costs are included in position sizing.
 
-The remaining target is calculated dynamically using the session's realised profit/loss.
+When enabled:
 
-For example:
+Planned Risk = Market Loss + Estimated Trading Costs
 
-If the daily target is $100 and $40 has already been realised, the remaining target is $60.
+The current commission estimate was calibrated using an FTMO ETHUSD trade.
 
-### Trading Sessions
+Commission structures vary between brokers, account types, and symbols, so the estimate should be treated as configurable rather than universal.
+
+## Required Margin
+
+The EA estimates the margin required for the calculated position using MT5's order-calculation functions.
+
+This allows the trader to compare the intended position size with its approximate margin requirement before execution.
+
+## Daily Profit Target
+
+The daily target can be configured using:
+
+- Percentage mode
+- Fixed-money mode
+
+The panel tracks:
+
+- Starting Balance
+- Daily Target
+- Realized P/L
+- Floating P/L
+- Remaining Target
+
+## Trading Session
 
 The EA uses a custom trading-day boundary:
 
-**23:30:00 to 23:29:59 broker/server time**
+**23:30:00 → 23:29:59**
 
-A position permanently belongs to the session in which it was originally opened.
+A new session begins at 23:30 broker/server time.
 
-For example:
+## Multi-Day Carry-Over
 
-- A position opened at `23:29:59` belongs to the previous session.
-- A position opened at `23:30:00` belongs to the new session.
-
-This allows the EA to separate positions and profit targets across trading days.
-
-### Carry-Over Positions
-
-A position that remains open after the session changes becomes a carry-over position.
-
-Carry-over positions remain permanently associated with their original session and original session target.
-
-They are not transferred into the new day's basket.
-
-A carry-over position can remain open for multiple days. Regardless of whether it remains open for two days, five days, or longer, it continues to belong to the session in which it was originally opened.
+Positions remain permanently associated with the session in which they were opened.
 
 For example:
 
-```text
-Monday Basket
-└── Position A still open
+- A trade opened Monday and held into Tuesday remains part of Monday's basket.
+- A new Tuesday trade belongs only to Tuesday's basket.
+- Monday's carried position does not affect Tuesday's floating P/L or target.
+- Tuesday's positions do not affect Monday's basket.
 
-Tuesday Basket
-├── Position B
-└── Position C
+This allows several independent session baskets to coexist.
 
-Wednesday Basket
-└── Position D
+## Session P/L
+
+Session calculations include:
+
+- Trading profit/loss
+- Swap
+- Commission where available
+
+Closed trades are attributed to their original opening session rather than the session in which they were closed.
+
+## Automatic Basket Closing
+
+When a session reaches its profit target, the EA can automatically close the open positions belonging to that session.
+
+It does not close positions belonging to another session.
+
+This allows an older carry-over basket and a newer trading-day basket to operate independently.
+
+## Multi-Chart Synchronization
+
+Terminal Global Variables are used to share important EA state between chart instances.
+
+This allows the EA to maintain session information and coordinate basket-management behaviour across charts.
+
+A close lock helps prevent multiple chart instances from attempting to close the same basket simultaneously.
+
+## Responsive Panel
+
+The panel supports manual scaling from:
+
+**50% to 150%**
+
+The `-` and `+` controls adjust panel scale in **1% increments**.
+
+The selected scale is saved so that the panel can retain the preferred size.
+
+## Clean Chart Execution
+
+The EA does not intentionally add trade-entry or trade-exit arrow objects to the chart.
+
+The custom red Stop Loss line remains available for visual risk management.
+
+Platform-native MT5 trade-level displays are controlled separately by MetaTrader chart settings.
+
+## Removing the EA
+
+The `X` button removes the EA and its panel from the chart.
+
+It does **not** close existing trades.
+
+## Installation
+
+1. Open MetaTrader 5.
+2. Open MetaEditor.
+3. Place `PositionSizerBasketManager.mq5` in the appropriate `MQL5/Experts` folder.
+4. Compile the EA.
+5. Return to MetaTrader 5.
+6. Attach the EA to a chart.
+7. Enable Algo Trading.
+8. Allow algorithmic trading when required.
+9. Test the EA on a demo account before using it on a live or funded account.
+
+## Important Notes
+
+Broker specifications differ between symbols and accounts.
+
+Actual results can be affected by:
+
+- Slippage
+- Commission
+- Tick value
+- Tick size
+- Contract size
+- Spread
+- Broker stop-distance rules
+- Volume limits
+- Execution conditions
+
+Always verify position sizing and trade execution on the intended broker/account before live use.
+
+## Current Version
+
+### v2.20
+
+Current functionality includes:
+
+- Direct BUY and SELL execution
+- Actual broker Stop Loss
+- Executable-price risk calculation
+- Cost-aware position sizing
+- Required Margin
+- Percentage and fixed-money risk
+- Daily profit targets
+- Multi-session basket management
+- Multi-day carry-over
+- Session-specific automatic basket closing
+- Draggable Stop Loss line
+- 1% panel scaling
+- Multi-chart state coordination
+- Clean chart execution
+
+## Author
+
+**Tinashe Chimanikire**
